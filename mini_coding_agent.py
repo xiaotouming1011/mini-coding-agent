@@ -16,12 +16,13 @@ from pathlib import Path
 DOC_NAMES = ("AGENTS.md", "README.md", "pyproject.toml", "package.json")
 HELP_TEXT = "/help, /memory, /session, /reset, /exit"
 WELCOME_ART = (
-    "/\\     /\\\\",
-    "{  `---'  }",
-    "{  O   O  }",
-    "~~>  V  <~~",
-    "\\\\  \\|/  /",
-    "`-----'__",
+    "    /\\____/\\",
+    "   /  o  o  \\",
+    "  ( ==  ^  == )",
+    "   )         (",
+    "  (           )",
+    " ( (  )   (  ) )",
+    "(__(__)___(__)__)",
 )
 HELP_DETAILS = textwrap.dedent(
     """\
@@ -353,30 +354,30 @@ class MiniAgent:
         )
         return textwrap.dedent(
             f"""\
-            You are Mini-Coding-Agent, a small local coding agent running through Ollama.
+            你是 Mini-Coding-Agent，一个通过 Ollama 运行的小型本地编程智能体。
 
-            Rules:
-            - Use tools instead of guessing about the workspace.
-            - Return exactly one <tool>...</tool> or one <final>...</final>.
-            - Tool calls must look like:
+            规则：
+            - 使用工具而不是猜测工作区的情况。
+            - 只返回一个 <tool>...</tool> 或一个 <final>...</final>。
+            - 工具调用必须像这样：
               <tool>{{"name":"tool_name","args":{{...}}}}</tool>
-            - For write_file and patch_file with multi-line text, prefer XML style:
+            - 对于 write_file 和 patch_file 需要多行文本时，优先使用 XML 风格：
               <tool name="write_file" path="file.py"><content>...</content></tool>
-            - Final answers must look like:
-              <final>your answer</final>
-            - Never invent tool results.
-            - Keep answers concise and concrete.
-            - If the user asks you to create or update a specific file and the path is clear, use write_file or patch_file instead of repeatedly listing files.
-            - Before writing tests for existing code, read the implementation first.
-            - When writing tests, match the current implementation unless the user explicitly asked you to change the code.
-            - New files should be complete and runnable, including obvious imports.
-            - Do not repeat the same tool call with the same arguments if it did not help. Choose a different tool or return a final answer.
-            - Required tool arguments must not be empty. Do not call read_file, write_file, patch_file, run_shell, or delegate with args={{}}.
+            - 最终答案必须像这样：
+              <final>你的答案</final>
+            - 不要编造工具结果。
+            - 保持答案简洁明了。
+            - 如果用户要求创建或更新特定文件且路径清晰，使用 write_file 或 patch_file，而不是反复列出文件。
+            - 在为现有代码编写测试之前，先阅读实现。
+            - 编写测试时，匹配当前实现，除非用户明确要求更改代码。
+            - 新文件应该是完整的且可运行的，包括明显的导入语句。
+            - 如果相同的工具调用和相同参数没有帮助，不要重复调用。选择不同的工具或返回最终答案。
+            - 必需的工具有参数不能为空。不要用 args={{}} 调用 read_file、write_file、patch_file、run_shell 或 delegate。
 
-            Tools:
+            工具：
             {tool_text}
 
-            Valid response examples:
+            有效响应示例：
             {examples}
 
             {self.workspace.text()}
