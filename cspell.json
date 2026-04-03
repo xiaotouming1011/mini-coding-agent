@@ -1,0 +1,12 @@
+{
+  "words": [
+    "Ollama",
+    "ollama",
+    "qwen",
+    "Qwen",
+    "qwen3",
+    "mini-coding-agent",
+    "pytest"
+  ],
+  "ignorePaths": ["**/*.pyc", "session/**", ".mini-coding-agent/**"]
+}
