@@ -37,11 +37,22 @@ MAX_TOOL_OUTPUT = 4000
 MAX_HISTORY = 12000
 IGNORED_PATH_NAMES = {".git", ".mini-coding-agent", "__pycache__", ".pytest_cache", ".ruff_cache", ".venv", "venv"}
 
+##############################
+#### Six Agent Components ####
+##############################
+# 1) Live Repo Context -> WorkspaceContext
+# 2) Prompt Shape And Cache Reuse -> build_prefix, memory_text, prompt
+# 3) Structured Tools, Validation, And Permissions -> build_tools, run_tool, validate_tool, approve, parse, path, tool_*
+# 4) Context Reduction And Output Management -> clip, history_text
+# 5) Transcripts, Memory, And Resumption -> SessionStore, record, note_tool, ask, reset
+# 6) Delegation And Bounded Subagents -> tool_delegate
+
 
 def now():
     return datetime.now(timezone.utc).isoformat()
 
 
+# Supporting helper for component 4 (context reduction and output management).
 def clip(text, limit=MAX_TOOL_OUTPUT):
     text = str(text)
     if len(text) <= limit:
@@ -60,6 +71,9 @@ def middle(text, limit):
     return text[:left] + "..." + text[-right:]
 
 
+##############################
+#### 1) Live Repo Context ####
+##############################
 class WorkspaceContext:
     def __init__(self, cwd, repo_root, branch, default_branch, status, recent_commits, project_docs):
         self.cwd = cwd
@@ -130,6 +144,9 @@ class WorkspaceContext:
         ).strip()
 
 
+##############################
+#### 5) Session Memory #######
+##############################
 class SessionStore:
     def __init__(self, root):
         self.root = Path(root)
@@ -263,6 +280,9 @@ class MiniAgent:
         bucket.append(item)
         del bucket[:-limit]
 
+    ###############################################
+    #### 3) Structured Tools And Permissions ######
+    ###############################################
     def build_tools(self):
         tools = {
             "list_files": {
@@ -311,6 +331,9 @@ class MiniAgent:
             }
         return tools
 
+    ############################################
+    #### 2) Prompt Shape And Cache Reuse #######
+    ############################################
     def build_prefix(self):
         tool_lines = []
         for name, tool in self.tools.items():
@@ -372,6 +395,9 @@ class MiniAgent:
             """
         ).strip()
 
+    #####################################################
+    #### 4) Context Reduction And Output Management #####
+    #####################################################
     def history_text(self):
         history = self.session["history"]
         if not history:
@@ -398,6 +424,9 @@ class MiniAgent:
 
         return clip("\n".join(lines), MAX_HISTORY)
 
+    ########################################################
+    #### 2) Prompt Shape And Cache Reuse (Continued) #######
+    ########################################################
     def prompt(self, user_message):
         return textwrap.dedent(
             f"""\
@@ -413,6 +442,9 @@ class MiniAgent:
             """
         ).strip()
 
+    ###############################################
+    #### 5) Session Memory (Continued) ###########
+    ###############################################
     def record(self, item):
         self.session["history"].append(item)
         self.session_path = self.session_store.save(self.session)
@@ -473,6 +505,9 @@ class MiniAgent:
         self.record({"role": "assistant", "content": final, "created_at": now()})
         return final
 
+    #############################################################
+    #### 3) Structured Tools, Validation, And Permissions #######
+    #############################################################
     def run_tool(self, name, args):
         tool = self.tools.get(name)
         if tool is None:
@@ -809,6 +844,9 @@ class MiniAgent:
         path.write_text(text.replace(old_text, str(args["new_text"]), 1), encoding="utf-8")
         return f"patched {path.relative_to(self.root)}"
 
+    ###################################################
+    #### 6) Delegation And Bounded Subagents ##########
+    ###################################################
     def tool_delegate(self, args):
         if self.depth >= self.max_depth:
             raise ValueError("delegate depth exceeded")
