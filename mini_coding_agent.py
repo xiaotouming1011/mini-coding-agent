@@ -36,7 +36,7 @@ HELP_DETAILS = textwrap.dedent(
 ).strip()
 MAX_TOOL_OUTPUT = 4000
 MAX_HISTORY = 12000
-IGNORED_PATH_NAMES = {".git", ".mini-coding-agent", "__pycache__", ".pytest_cache", ".ruff_cache", ".venv", "venv"}
+IGNORED_PATH_NAMES = {".git", ".mini-couvding-agent", "__pycache__", ".pytest_cache", ".ruff_cache", ".venv", "venv"}
 
 ##############################
 #### Six Agent Components ####
@@ -55,6 +55,10 @@ def now():
 
 # Supporting helper for component 4 (context reduction and output management).
 def clip(text, limit=MAX_TOOL_OUTPUT):
+    """
+    文本裁剪工具：超长时自动截断并添加省略号。保留前面，切掉后面
+    适合日志,描述,README,状态文本
+    """
     text = str(text)
     if len(text) <= limit:
         return text
@@ -62,6 +66,11 @@ def clip(text, limit=MAX_TOOL_OUTPUT):
 
 
 def middle(text, limit):
+    """
+    文本截断工具，超长文本从中间截断，保留开头+结尾，中间用...连接
+    适合,哈希，路径,文件名,长ID
+
+    """
     text = str(text).replace("\n", " ")
     if len(text) <= limit:
         return text
@@ -74,22 +83,31 @@ def middle(text, limit):
 
 ##############################
 #### 1) Live Repo Context ####
+#传入一个目录路径,自动获取目录所在的GIT仓库的所有关键信息
+#让智能体知道自己在哪个项目，在哪个分支，有什么变更，近期做了什么修改
 ##############################
+
 class WorkspaceContext:
     def __init__(self, cwd, repo_root, branch, default_branch, status, recent_commits, project_docs):
-        self.cwd = cwd
-        self.repo_root = repo_root
-        self.branch = branch
-        self.default_branch = default_branch
-        self.status = status
-        self.recent_commits = recent_commits
-        self.project_docs = project_docs
+        self.cwd = cwd                              #当前工作目录
+        self.repo_root = repo_root                  #git仓库根目录
+        self.branch = branch                        #当前分支名
+        self.default_branch = default_branch        #默认分支（main/master）
+        self.status = status                        #工作区状态  
+        self.recent_commits = recent_commits        #最近五条提交
+        self.project_docs = project_docs            #项目文档片段
 
     @classmethod
     def build(cls, cwd):
+        """
+        核心工厂方法：传入目录路径，自动采集所有工作区信息
+        """
         cwd = Path(cwd).resolve()
 
         def git(args, fallback=""):
+            """
+            封装git命令调用:自带异常补货，超时，输出清理
+            """
             try:
                 result = subprocess.run(
                     ["git", *args],
@@ -102,8 +120,9 @@ class WorkspaceContext:
                 return result.stdout.strip() or fallback
             except Exception:
                 return fallback
-
+        #获取仓库根目录
         repo_root = Path(git(["rev-parse", "--show-toplevel"], str(cwd))).resolve()
+        #自动扫描项目文档（仓库根目录+当前路径）
         docs = {}
         for base in (repo_root, cwd):
             for name in DOC_NAMES:
@@ -113,8 +132,9 @@ class WorkspaceContext:
                 key = str(path.relative_to(repo_root))
                 if key in docs:
                     continue
+                #读取文本并裁剪长度
                 docs[key] = clip(path.read_text(encoding="utf-8", errors="replace"), 1200)
-
+        #构造并返回实例
         return cls(
             cwd=str(cwd),
             repo_root=str(repo_root),
@@ -126,6 +146,9 @@ class WorkspaceContext:
         )
 
     def text(self):
+        """
+        将工作区信息格式化为通俗易懂的文本块，供模型输入使用
+        """
         commits = "\n".join(f"- {line}" for line in self.recent_commits) or "- none"
         docs = "\n".join(f"- {path}\n{snippet}" for path, snippet in self.project_docs.items()) or "- none"
         return textwrap.dedent(
@@ -150,26 +173,41 @@ class WorkspaceContext:
 ##############################
 class SessionStore:
     def __init__(self, root):
-        self.root = Path(root)
+        """
+        会话的储存路径"""
+        self.root = Path(root)      
         self.root.mkdir(parents=True, exist_ok=True)
 
-    def path(self, session_id):
+    def path(self, session_id):  
+        """
+        生成会话文件路径"""
         return self.root / f"{session_id}.json"
 
     def save(self, session):
+        """
+        保存会话到json文件"""
         path = self.path(session["id"])
         path.write_text(json.dumps(session, indent=2), encoding="utf-8")
         return path
 
     def load(self, session_id):
+        """
+        从文件加载会话
+        """
         return json.loads(self.path(session_id).read_text(encoding="utf-8"))
 
     def latest(self):
+        """
+        获取最新会话的ID
+        """
         files = sorted(self.root.glob("*.json"), key=lambda path: path.stat().st_mtime)
         return files[-1].stem if files else None
 
 
 class FakeModelClient:
+    """
+    预设回答，fakeAI客户端，测试用
+    """
     def __init__(self, outputs):
         self.outputs = list(outputs)
         self.prompts = []
@@ -182,6 +220,9 @@ class FakeModelClient:
 
 
 class OllamaModelClient:
+    """
+    封装与Ollama API的通信
+    """
     def __init__(self, model, host, temperature, top_p, timeout):
         self.model = model
         self.host = host.rstrip("/")
@@ -189,21 +230,22 @@ class OllamaModelClient:
         self.top_p = top_p
         self.timeout = timeout
 
-    def complete(self, prompt, max_new_tokens):
+    def complete(self, prompt, max_new_tokens):   #发送prompt到Ollama API并获取回答
         payload = {
             "model": self.model,
             "prompt": prompt,
-            "stream": False,
+            "stream": False,   #是否流式输出
             "raw": False,
             "think": False,
             "options": {
                 "num_predict": max_new_tokens,
                 "temperature": self.temperature,
-                "top_p": self.top_p,
+                "top_p": self.top_p,     #核采样
             },
         }
+        #发送HTTP POST请求到ollama
         request = urllib.request.Request(
-            self.host + "/api/generate",
+            self.host + "/api/generate",     #Ollama生成接口
             data=json.dumps(payload).encode("utf-8"),
             headers={"Content-Type": "application/json"},
             method="POST",
@@ -216,41 +258,45 @@ class OllamaModelClient:
             raise RuntimeError(f"Ollama request failed with HTTP {exc.code}: {body}") from exc
         except urllib.error.URLError as exc:
             raise RuntimeError(
-                "Could not reach Ollama.\n"
-                "Make sure `ollama serve` is running and the model is available.\n"
+                "无法连接Ollama,\n"
+                "请确认运行了ollama server.\n"
                 f"Host: {self.host}\n"
                 f"Model: {self.model}"
             ) from exc
-
+        #如果模型返回错误
         if data.get("error"):
-            raise RuntimeError(f"Ollama error: {data['error']}")
+            raise RuntimeError(f"Ollama 错误: {data['error']}")
         return data.get("response", "")
 
 
 class MiniAgent:
     def __init__(
         self,
-        model_client,
-        workspace,
-        session_store,
-        session=None,
-        approval_policy="ask",
-        max_steps=6,
-        max_new_tokens=512,
-        depth=0,
-        max_depth=1,
-        read_only=False,
+        model_client,           #AI客户端
+        workspace,              #工作空间
+        session_store,          #会话存储对象
+        session=None,           #传入已有会话
+        approval_policy="ask",  #审批策略 ：ask（默认）每次需要审批时询问用户；auto自动批准所有工具调用；never拒绝所有工具调用
+        max_steps=6,            #最大执行步骤数
+        max_new_tokens=512,     
+        depth=0,                #当前递归深度
+        max_depth=1,            #最大递归深度
+        read_only=False,        #制度模式
     ):
         self.model_client = model_client
         self.workspace = workspace
-        self.root = Path(workspace.repo_root)
+        self.root = Path(workspace.repo_root)   #工作区目录
         self.session_store = session_store
+
+        #执行策略配置
         self.approval_policy = approval_policy
         self.max_steps = max_steps
         self.max_new_tokens = max_new_tokens
         self.depth = depth
         self.max_depth = max_depth
         self.read_only = read_only
+
+        #会话数据：无传入时则自动生成新会话
         self.session = session or {
             "id": datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6],
             "created_at": now(),
@@ -258,9 +304,10 @@ class MiniAgent:
             "history": [],
             "memory": {"task": "", "files": [], "notes": []},
         }
-        self.tools = self.build_tools()
-        self.prefix = self.build_prefix()
-        self.session_path = self.session_store.save(self.session)
+        #初始化工具和提示词前缀
+        self.tools = self.build_tools()     #构建可用工具
+        self.prefix = self.build_prefix()   #构建系统提示词前缀
+        self.session_path = self.session_store.save(self.session)   #保存会话
 
     @classmethod
     def from_session(cls, model_client, workspace, session_store, session_id, **kwargs):
@@ -277,9 +324,9 @@ class MiniAgent:
         if not item:
             return
         if item in bucket:
-            bucket.remove(item)
-        bucket.append(item)
-        del bucket[:-limit]
+            bucket.remove(item)     #去重
+        bucket.append(item)         #加到最后
+        del bucket[:-limit]         #只保留最新limit条
 
     ###############################################
     #### 3) Structured Tools And Permissions ######
@@ -288,7 +335,7 @@ class MiniAgent:
         tools = {
             "list_files": {
                 "schema": {"path": "str='.'"},
-                "risky": False,
+                "risky": False,     #是否需要审批
                 "description": "List files in the workspace.",
                 "run": self.tool_list_files,
             },
@@ -316,7 +363,7 @@ class MiniAgent:
                 "description": "Write a text file.",
                 "run": self.tool_write_file,
             },
-            "patch_file": {
+            "patch_file": {     #置换文件内容
                 "schema": {"path": "str", "old_text": "str", "new_text": "str"},
                 "risky": True,
                 "description": "Replace one exact text block in a file.",
@@ -324,7 +371,7 @@ class MiniAgent:
             },
         }
         if self.depth < self.max_depth:
-            tools["delegate"] = {
+            tools["delegate"] = {      #委托子任务
                 "schema": {"task": "str", "max_steps": "int=3"},
                 "risky": False,
                 "description": "Ask a bounded read-only child agent to investigate.",
@@ -367,7 +414,7 @@ class MiniAgent:
               <final>你的答案</final>
             - 不要编造工具结果。
             - 保持答案简洁明了。
-            - 如果用户要求创建或更新特定文件且路径清晰，使用 write_file 或 patch_file，而不是反复列出文件。
+            - 如果用户要求创建或更新特定文件且路径清晰，使用 write_file 或 patch_file,而不是反复列出文件。
             - 在为现有代码编写测试之前，先阅读实现。
             - 编写测试时，匹配当前实现，除非用户明确要求更改代码。
             - 新文件应该是完整的且可运行的，包括明显的导入语句。
@@ -384,7 +431,7 @@ class MiniAgent:
             """
         ).strip()
 
-    def memory_text(self):
+    def memory_text(self):      #转换记忆的格式
         memory = self.session["memory"]
         return textwrap.dedent(
             f"""\
@@ -406,8 +453,9 @@ class MiniAgent:
 
         lines = []
         seen_reads = set()
-        recent_start = max(0, len(history) - 6)
+        recent_start = max(0, len(history) - 6)  #只保留最近六条
         for index, item in enumerate(history):
+            #对于旧的read_file结果去重
             recent = index >= recent_start
             if item["role"] == "tool" and item["name"] == "read_file" and not recent:
                 path = str(item["args"].get("path", ""))
@@ -416,7 +464,7 @@ class MiniAgent:
                 seen_reads.add(path)
 
             if item["role"] == "tool":
-                limit = 900 if recent else 180
+                limit = 900 if recent else 180 #旧内容限制180字符，新的限制900字符
                 lines.append(f"[tool:{item['name']}] {json.dumps(item['args'], sort_keys=True)}")
                 lines.append(clip(item["content"], limit))
             else:
@@ -447,38 +495,43 @@ class MiniAgent:
     #### 5) Session Memory (Continued) ###########
     ###############################################
     def record(self, item):
-        self.session["history"].append(item)
-        self.session_path = self.session_store.save(self.session)
+        self.session["history"].append(item)   #加到对话历史
+        self.session_path = self.session_store.save(self.session)  #保存会话
 
     def note_tool(self, name, args, result):
         memory = self.session["memory"]
         path = args.get("path")
+        #如果是文件操作，就记住这个文件路径，最多8个
         if name in {"read_file", "write_file", "patch_file"} and path:
             self.remember(memory["files"], str(path), 8)
+        #工具结果做成笔记，最多五条
         note = f"{name}: {clip(str(result).replace(chr(10), ' '), 220)}"
         self.remember(memory["notes"], note, 5)
 
     def ask(self, user_message):
         memory = self.session["memory"]
+        #第一轮对话：记住用户任务
         if not memory["task"]:
             memory["task"] = clip(user_message.strip(), 300)
+        #把用户消息存进历史
         self.record({"role": "user", "content": user_message, "created_at": now()})
 
-        tool_steps = 0
-        attempts = 0
+        tool_steps = 0      #已执行的工具数量
+        attempts = 0        #尝试次数
         max_attempts = max(self.max_steps * 3, self.max_steps + 4)
-
+        #循环--AI思考--执行工具
         while tool_steps < self.max_steps and attempts < max_attempts:
             attempts += 1
+            #发送提示词给模型
             raw = self.model_client.complete(self.prompt(user_message), self.max_new_tokens)
+            #解析模型的响应
             kind, payload = self.parse(raw)
-
             if kind == "tool":
                 tool_steps += 1
-                name = payload.get("name", "")
-                args = payload.get("args", {})
-                result = self.run_tool(name, args)
-                self.record(
+                name = payload.get("name", "")      
+                args = payload.get("args", {})      
+                result = self.run_tool(name, args)  #
+                self.record( #记录工具结果
                     {
                         "role": "tool",
                         "name": name,
@@ -487,12 +540,12 @@ class MiniAgent:
                         "created_at": now(),
                     }
                 )
-                self.note_tool(name, args, result)
-                continue
+                self.note_tool(name, args, result)  #更新记忆
+                continue    #继续下一轮
 
-            if kind == "retry":
-                self.record({"role": "assistant", "content": payload, "created_at": now()})
-                continue
+            if kind == "retry":     #模型响应格式错误
+                self.record({"role": "assistant", "content": payload, "created_at": now()})     #记录错误
+                continue        #重试
 
             final = (payload or raw).strip()
             self.record({"role": "assistant", "content": final, "created_at": now()})
